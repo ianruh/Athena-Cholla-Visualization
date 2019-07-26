@@ -3,19 +3,13 @@ from pylab import *  # imports numpy as np and matplotlib
 import matplotlib.gridspec as gridspec
 import athena_read   # Athena++'s reader
 import array as ar   # for integer arrays
-from PW15classes import *
-from PW15classes import ti as blondin
-from PW15classes import linearTheory
-from PW15classes.linearTheory import getAnalyticSolution
-from PW15classes.linearTheory import addAnalyticSolutions
-import pickle
 import multiprocessing as mp
 import subprocess
 import os
 import sys
 import warnings
 import contextlib
-from IPython import embed
+import itertools
 
 if __name__ == '__main__':
 	def printHelp():
@@ -41,6 +35,7 @@ Optional:
 	-l --label:	The label to put in the legend for the preceeding
 			data set. If this is ommitted, then the name of the
 			folder for the data set is used.
+	-t --title:	The title for the plot. Defaults to Title.
 	
 	*Note: 	If you are using IPython, you need to run it with:
 
@@ -49,12 +44,15 @@ Optional:
 		The '--' tells IPython to pass the remaining options
 		to the script.
 		""")
+
 	cholla_dirs = []
 	athena_dirs = []
 	cholla_labels = []
 	athena_labels = []
 	out_name = ""
+	title = "Title"
 
+	# Parse params
 	if(len(sys.argv) == 1):
 		printHelp()
 		sys.exit(1)
@@ -86,6 +84,10 @@ Optional:
 					athena_labels.append([name for name in athena_dir.split('/') if name != ''][-1])
 					i += 1
 				continue
+			if(arg == "-t" or arg == "--title"):
+				title = sys.argv[i+1]
+				i+=1
+				continue
 			if(arg == "-o" or arg == "--out"):
 				out_name = sys.argv[i+1]
 				if(out_name[-4:] != ".mp4"):
@@ -95,7 +97,7 @@ Optional:
 			if(arg == "-h" or arg == "--help"):
 				printHelp()
 				sys.exit(1)
-			i += 1
+			i+=1
 	except:
 		print("Unknown usage. Run with `--help` for help.".format(sys.argv[0]))
 		sys.exit(1)
@@ -104,7 +106,6 @@ Optional:
 		print("Unknown usage. Run with `--help` for help.".format(sys.argv[0]))
 		sys.exit(1)
 	
-# embed()
 ###### For removing annoying stdout
 class DummyFile(object):
     def write(self, x): pass
@@ -121,31 +122,31 @@ def nostdout():
 
 ###### End hackish getaround
 
-""" Inputs """	
 if __name__ == '__main__':
 	MAKE_MOVIE = out_name != ""
-	plot_analytic = 1
 	plot_athena_solution = len(athena_dirs) != 0
-	if(len(cholla_dirs) > 0):
-		i_dumps = ar.array('i',(i for i in range(0,len(os.listdir(cholla_dirs[0]))-1,1)))
-	else:
-		i_dumps = ar.array('i',(i for i in range(0,len(os.listdir(athena_dirs[0]))-1,1)))
+	numFiles = 1e10
+	extensions = ["tab", "h5", "0"]
+	for folder in itertools.chain(cholla_dirs, athena_dirs):
+		num = len([fil for fil in os.listdir(folder) if fil.split(".")[-1] in extensions])
+		if num < numFiles:
+			numFiles = num
+	
+	i_dumps = ar.array('i',(i for i in range(0,numFiles-1,1)))
 	Ndumps = len(i_dumps)
 
-ADD_ALL_NODES = 0
-JUST_SOUND_WAVES = 0
+# Some Constants and settings
+
 RESIDUALS = 0
-TC = 1
 DE = 0
-BLONDIN = 1
-STATIC_AXES = True
+STATIC_AXES = True		# If true, the scales for rho, v, and T will be constant
 
 nT = 1e13
 xi_b = 190.
 xf = 1.
 dt = 0.25 # time between dumps in code units
 dump_tag = 'ti.block0.out1.'
-
+gamma = 5./3.
 Amp = 1e-4 # amplitude of perturbation
 
 tempDir = '.tmp/'
@@ -156,94 +157,13 @@ if __name__ == '__main__' and MAKE_MOVIE:
 pad_d = 100
 pad_v = 10
 pad_p = 1e4
-
-
-""" Inputs for dispersion relation calc """
-
-gamma = 5./3.
-
-# calculate H/C derivatives
-if BLONDIN:
-	hcModel = blondin.HCcurves(gamma,nT=nT)
-	eqvals = hcModel.getEquilibriumValues(xi_b)
-	athena = hcModel.getCodeUnits(eqvals,1.)
-	L_T,L_rho = hcModel.getL_TandL_rho(xi_b,eqvals)
-
-	# Conduction
-	field_length = hcModel.getFieldLength(eqvals)/athena['lambda']
-else:
-	L_T,L_rho = 0.5,1.
-
-	# Conduction
-	field_length = 0.2
-
-# TI parameters
-Mach0 = 0.
-cs0 = 1.
-K1 = 1.
-IVs = {}
-IVs['density'] = 1.
-IVs['pressure'] = 1./gamma
-IVs['sound speed'] = cs0
-IVs['velocity'] = IVs['sound speed']*Mach0
-IVs['A'] = Amp
-IVs['M0'] = Mach0
-
-norms = {}
-norms['density'] = IVs['density']
-norms['velocity'] = cs0
-norms['pressure'] = IVs['density']*cs0**2
-
-#wave properties
-xo = 0.
-xc = 0.5*xf 
-Nwaves  = 1.
-wavelength = (xf - xo)/Nwaves
-k = 2.*np.pi/wavelength #wavenumber
-
-# basic TI dispersion relation parameters (M0 allows for nonzero initial velocity)
-TIparams = {'gamma':gamma, 'cs0':cs0, 'k':k, 'tau_th':K1, 'L_T':L_T, 'L_rho':L_rho, \
-           'lambdaF':field_length, 'K':1., 'M0':Mach0}
-
-# RADFORCE PARAMETERS - dispersion relation accounting for rad force			
-TIparams['F_T'] = 0.
-TIparams['F_S'] = 0.
-RFparams = {'alpha':0., 'beta':0., 'tau_rad':1.}
-
-# get the coefficients needed in analytic solution
-coeffs = linearTheory.getCoeffs(TIparams,RFparams,IVs['pressure'],TC=TC)
-
-
-""" Load Athena grid data """	
-
-# # load cell edge grid
-# if(plot_athena_solution):
-# 	dump = dump_tag + str(0).zfill(5) + '.tab'
-# 	athena_dic = athena_read.tab(dump_dir_athena + dump, ['x', 'rho', 'pgas', 'v1', 'v2', 'v3'])
-# 	x = athena_dic['x'][0,0,:]
-# 	d = athena_dic['rho'][0,0,:]
-# 	p = athena_dic['pgas'][0,0,:]
-# 	v = athena_dic['v1'][0,0,:]
-
-""" Load or calculate equilibrium curve """
-xis = np.logspace(1.,4.,150)
-Ts = np.logspace(4.,7.,150)
-X,Y = np.meshgrid(xis,Ts)
-try:
-	L = pickle.load(open(os.path.dirname(__file__) + '/pickled/Blondin_eqcurve.p', "rb"))
-	Z = pickle.load(open(os.path.dirname(__file__) + '/pickled/Blondin_balbuscontour.p', "rb"))
-except:
-	Z = hcModel.sampleBalbusCriterion(xis,Ts)
-	L = hcModel.sampleNetLossFunction(xis,Ts)
-	if __name__ == '__main__':
-		pickle.dump(L, open(os.path.dirname(__file__) + '/pickled/Blondin_eqcurve.p', "wb"), protocol=2)
-		pickle.dump(Z, open(os.path.dirname(__file__) + '/pickled/Blondin_balbuscontour.p', "wb"), protocol=2)
 	
 """ Plotting routine """	
 colors = ['k','b','r']
 linestyles = ['-','--','--']
 linewidths=[2,2,1]
 
+# Find min and max for each of the constant axes
 if __name__ == '__main__' and STATIC_AXES:
 	def max(num1, num2):
 		if(num1 > num2):
@@ -282,19 +202,35 @@ if __name__ == '__main__' and STATIC_AXES:
 				p  = (E - 0.5*d*v**2) * (gamma - 1.0)
 				ge  = p/d/(gamma - 1.0)
 
-			t = eqvals['T0']*gamma*p/d
+			t = gamma*p/d
 			maxRho = max(maxRho, d.max())
 			minRho = min(minRho, d.min())
 			maxV = max(maxV, v.max())
 			minV = min(minV, v.min())
 			maxT = max(maxT, t.max())
 			minT = min(minT, t.min())
-		    		
+		for directory,label in zip(athena_dirs, athena_labels):
+			dump = directory + dump_tag + str(i_dumps[i]).zfill(5) + '.tab'
+			athena_dic = athena_read.tab(dump, ['x', 'rho', 'pgas', 'v1', 'v2', 'v3'])
+			x_ath = athena_dic['x'][0,0,:]
+			d_ath = athena_dic['rho'][0,0,:]
+			p_ath = athena_dic['pgas'][0,0,:]
+			v_ath = athena_dic['v1'][0,0,:]
+			t_ath = np.log(gamma*p_ath/d_ath)
+			maxRho = max(maxRho, d_ath.max())
+			minRho = min(minRho, d_ath.min())
+			maxV = max(maxV, v_ath.max())
+			minV = min(minV, v_ath.min())
+			maxT = max(maxT, t_ath.max())
+			minT = min(minT, t_ath.min())
+
+# Function called to plot the data for each time step
 def plotter(bundle):
 	global x
+
+	# Unpack parameters
 	i = bundle["i"]
 	MAKE_MOVIE = bundle["make_movie"]
-	plot_analytic = bundle["plot_analytic"]
 	plot_athena_solution = bundle["plot_athena_solution"]
 	cholla_dirs = bundle["cholla_dirs"]
 	labels = bundle["cholla_labels"]
@@ -313,11 +249,8 @@ def plotter(bundle):
 		minV = bundle["minV"]
 		maxT = bundle["maxT"]
 		minT = bundle["minT"]
-	
-	if(plot_athena_solution):
-		run_name_athena = athena_labels[0]
-		dump_dir_athena = athena_dirs[0]
-	
+
+	# Clear the axes if it is showing in a gui
 	if(not MAKE_MOVIE):
 		ax1.cla()
 		ax2.cla()
@@ -334,8 +267,6 @@ def plotter(bundle):
 		plt.axis([0., x[-1], -pad_v*Amp, pad_v*Amp])
 		plt.axis([0., x[-1], -(pad_p*Amp)**2, pad_p*Amp])
 
-	ax1.set_title('PW15 TI test')
-
 	#Display time on window
 	time_template = 'time = %.1f'
 	time_text = ax1.text(0.75, 0.9, '', transform=ax1.transAxes) 
@@ -344,6 +275,7 @@ def plotter(bundle):
 	time = dt*float(i_dumps[i]) # time in code units
 	time_text.set_text(time_template%(time))
 	
+	# Loop through cholla dumps
 	for dump_dir,color,ls,lw,label in zip(cholla_dirs,colors,linestyles,linewidths,labels):
 		
 		f = h5py.File(dump_dir+str(i_dumps[i])+'.h5.0', 'r')
@@ -372,9 +304,9 @@ def plotter(bundle):
 		cs2 = gamma*p/d
 		cs = np.sqrt(cs2)
 		M = v/cs
-		t = eqvals['T0']*gamma*p/d
-		logT_cgs = np.log10(eqvals['T0']*gamma*p/d)
-		logxi_cgs = np.log10(xi_b/d)
+		t = gamma*p/d
+		# logT_cgs = np.log10(gamma*p/d)
+		# logxi_cgs = np.log10(xi_b/d)
 	# 	B = 0.5*v**2 + cs2/(gamma - 1.) 
 	
 		# check to see if floors are hit
@@ -383,69 +315,33 @@ def plotter(bundle):
 		# print("time = {}, d_min = {}, d_max = {}, p_min = {}, p_max = {}".format(time,d_min,d_max,p_min,np.max(p)))
 	
 		# plot Cholla solution
-		ax1.plot(x/270,d,ls=ls,lw=lw,color=color,label=label)
-		ax2.plot(x/270,v,ls=ls,lw=lw,color=color)
-		ax3.plot(x/270,p,ls=ls,lw=lw,color=color)
-		ax5.plot(x/270,t,ls=ls,lw=lw,color=color)
+		ax1.plot(x,d,ls=ls,lw=lw,color=color,label=label)
+		ax2.plot(x,v,ls=ls,lw=lw,color=color)
+		ax3.plot(x,p,ls=ls,lw=lw,color=color)
+		ax5.plot(x,t,ls=ls,lw=lw,color=color)
 
-	if plot_athena_solution: #load/unpack Athena data
-			for directory,label in zip(athena_dirs, athena_labels):
-				dump = directory + dump_tag + str(i_dumps[i]).zfill(5) + '.tab'
-				athena_dic = athena_read.tab(dump, ['x', 'rho', 'pgas', 'v1', 'v2', 'v3'])
-				x_ath = athena_dic['x'][0,0,:]
-				d_ath = athena_dic['rho'][0,0,:]
-				p_ath = athena_dic['pgas'][0,0,:]
-				v_ath = athena_dic['v1'][0,0,:]
-				s_ath = np.log(p_ath/d_ath**gamma)
-				
-				if RESIDUALS:
-					d_ath -= IVs['density']
-					p_ath -= IVs['pressure']
-				
-				ax1.plot(x_ath,d_ath,ls='-',lw=1,color='orange',label=label)
-				ax2.plot(x_ath,v_ath,ls='-',lw=1,color='orange')
-				ax3.plot(x_ath,p_ath,ls='-',lw=1,color='orange')
-				ax5.plot(x_ath,s_ath,ls='-',lw=1,color='orange')
-				
-				# plot tracks
-				logT_cgs_ath = np.log10(eqvals['T0']*gamma*p_ath/d_ath)
-				logxi_cgs_ath = np.log10(xi_b/d_ath)
-				ax4.plot(logxi_cgs_ath,logT_cgs_ath,ls='',marker='o',color='orange')
-			
-	if plot_analytic: # plot analytic solution
-		global d_analytic,v_analytic,p_analytic
-		cmode = 1
-		d_cmode = getAnalyticSolution('density',x,time,coeffs,IVs,norms,Nwaves=Nwaves,resid=RESIDUALS)
-		v_cmode = getAnalyticSolution('velocity',x,time,coeffs,IVs,norms,Nwaves=Nwaves,resid=RESIDUALS)
-		p_cmode = getAnalyticSolution('pressure',x,time,coeffs,IVs,norms,Nwaves=Nwaves,resid=RESIDUALS)
+	# Loop through athena dumps
+	for directory,label in zip(athena_dirs, athena_labels):
+		dump = directory + dump_tag + str(i_dumps[i]).zfill(5) + '.tab'
+		athena_dic = athena_read.tab(dump, ['x', 'rho', 'pgas', 'v1', 'v2', 'v3'])
+		x_ath = athena_dic['x'][0,0,:]
+		d_ath = athena_dic['rho'][0,0,:]
+		p_ath = athena_dic['pgas'][0,0,:]
+		v_ath = athena_dic['v1'][0,0,:]
+		t_ath = np.log(gamma*p_ath/d_ath)
 		
-		if ADD_ALL_NODES or JUST_SOUND_WAVES:
-			if JUST_SOUND_WAVES:
-				cmode = 0
-			d_analytic = addAnalyticSolutions('density',x,time,TIparams,IVs,norms,conduction=TC,Nwaves=Nwaves,resid=RESIDUALS,cmode=cmode)
-			v_analytic = addAnalyticSolutions('velocity',x,time,TIparams,IVs,norms,conduction=TC,Nwaves=Nwaves,resid=RESIDUALS,cmode=cmode)
-			p_analytic = addAnalyticSolutions('pressure',x,time,TIparams,IVs,norms,conduction=TC,Nwaves=Nwaves,resid=RESIDUALS,cmode=cmode)	
-			if JUST_SOUND_WAVES:
-				d_analytic += IVs['density']
-				v_analytic += IVs['velocity']
-				p_analytic += IVs['pressure']		
-		else:
-			d_analytic = d_cmode
-			v_analytic = v_cmode
-			p_analytic = p_cmode
-		with nostdout():
-			s_analytic = np.log(p_analytic/d_analytic**gamma)
+		if RESIDUALS:
+			d_ath -= IVs['density']
+			p_ath -= IVs['pressure']
 		
-		ax1.plot(x,d_analytic,'gray',lw=2,ls='--',label='Analytic')
-		ax2.plot(x,v_analytic,'gray',lw=2,ls='--')
-		ax3.plot(x,p_analytic,'gray',lw=2,ls='--')
-		ax5.plot(x,s_analytic,'gray',lw=2,ls='--')
+		ax1.plot(x_ath,d_ath,ls='-',lw=1,color='orange',label=label)
+		ax2.plot(x_ath,v_ath,ls='-',lw=1,color='orange')
+		ax3.plot(x_ath,p_ath,ls='-',lw=1,color='orange')
+		ax5.plot(x_ath,t_ath,ls='-',lw=1,color='orange')
 	
 	
 	ax1.legend(loc='upper left')
 	
-	# plot tracks of last sim 
-	ax4.plot(logxi_cgs,logT_cgs,ls='',marker='.',color=color)
 	if(STATIC_AXES):
 		ax1.set_ylim([minRho, maxRho])
 		ax2.set_ylim([minV, maxV])
@@ -457,8 +353,6 @@ def plotter(bundle):
 """ Code to save image, animate, or make movie """
 if __name__ == '__main__':
 	fig = figure(figsize=(11.5, 7))
-
-	""" Figure setup plus a hack function """	
 
 	#compatible with MNRAS style file when saving figs
 	# matplotlib.rcParams['mathtext.fontset'] = 'stix'
@@ -472,6 +366,7 @@ if __name__ == '__main__':
 
 	ax1 = fig.add_subplot(spec3[0, 0])
 	ylabel(r'$\rho$',fontsize=fs)
+	ax1.set_title(title)
 
 	ax2 = fig.add_subplot(spec3[1, 0])
 	ylabel(r'$v$',fontsize=fs)
@@ -483,16 +378,6 @@ if __name__ == '__main__':
 	ax4 = fig.add_subplot(spec3[0:2, 1:])
 	ylabel(r'$\log(T)$',fontsize=fs)
 	xlabel(r'$\log(\xi)$',fontsize=fs)
-	
-	# eq_line = ax4.lines[0]
-	# balbus_line = ax4.lines[1]
-	eq_contour = plt.contour(np.log10(X),np.log10(Y),L,[0.])
-	eq = eq_contour.collections[0]
-	plt.setp(eq, linewidth=2, color ='k')
-
-	balbus_contour = plt.contour(np.log10(X),np.log10(Y),Z,[0.])
-	balbus = balbus_contour.collections[0]	
-	plt.setp(balbus, linewidth=2, color ='gray', linestyle='--')
 
 	ax5 = fig.add_subplot(spec3[2, 1:])
 	ylabel(r'$T$',fontsize=fs)
@@ -500,12 +385,15 @@ if __name__ == '__main__':
 
 	plt.subplots_adjust(left=0.11, bottom=0.09, right=0.97, top=0.94, wspace=0.26, hspace=0.3)	
 
+	# Function to bundle all of the parameters necessary.
+	# Everything must be passed to it because the plotter function
+	# may be run in a thread without access to any global variables
+	# defined in the main thread.
 	def bundler(i):
 		info = {
 			"i": i,
 			"make_movie": MAKE_MOVIE,
 			"plot_athena_solution": plot_athena_solution,
-			"plot_analytic": plot_analytic,
 			"cholla_dirs": cholla_dirs,
 			"cholla_labels": cholla_labels,
 			"athena_dirs": athena_dirs,
@@ -528,7 +416,7 @@ if __name__ == '__main__':
 			})
 		return info
 
-	mp.set_start_method('forkserver')
+	mp.set_start_method('forkserver') # Probably have to change this if running on Windows
 	if MAKE_MOVIE:
 		pool = mp.Pool(None)
 		
@@ -544,6 +432,7 @@ if __name__ == '__main__':
 	else:
 		import matplotlib.animation as animation
 
+		# Wrapper for plotting in the gui
 		def plotWrapper(i):
 			bundle = bundler(i)
 			plotter(bundle)
