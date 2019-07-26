@@ -1,0 +1,13 @@
+.DS_Store
+
+# Media
+*.mp4
+*.png
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Exceptions
+!fig.png
