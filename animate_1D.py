@@ -10,11 +10,12 @@ import sys
 import warnings
 import contextlib
 import itertools
+from IPython import embed
 
 if __name__ == '__main__':
 	def printHelp():
 		print("""
-Usage: python animate [options]
+Usage: python animate_1D.py [options]
 
 Required:
 	-c --cholla:	Directory containing the output files (*.h5)
@@ -159,9 +160,9 @@ pad_v = 10
 pad_p = 1e4
 	
 """ Plotting routine """	
-colors = ['k','b','r']
-linestyles = ['-','--','--']
-linewidths=[2,2,1]
+colors = ['k','b','r','g','darkviolet']
+linestyles = ['-','--','--',':', '-.']
+linewidths=[2,2,1,1,1]
 
 # Find min and max for each of the constant axes
 if __name__ == '__main__' and STATIC_AXES:
@@ -184,7 +185,7 @@ if __name__ == '__main__' and STATIC_AXES:
 	for i in range(0,Ndumps, 1):
 		for dump_dir in cholla_dirs:
 			
-			f = h5py.File(dump_dir+str(i_dumps[i])+'.h5.0', 'r')
+			f = h5py.File(dump_dir+str(i_dumps[i])+'.h5', 'r')
 			head = f.attrs
 			nx = head['dims'][0]
 			x = np.array(range(0,nx,1))
@@ -237,6 +238,7 @@ def plotter(bundle):
 	athena_dirs = bundle["athena_dirs"]
 	athena_labels = bundle["athena_labels"]
 	i_dumps = bundle["i_dumps"]
+	gamma = bundle["gamma"]
 	ax1 = bundle["ax1"]
 	ax2 = bundle["ax2"]
 	ax3 = bundle["ax3"]
@@ -278,10 +280,10 @@ def plotter(bundle):
 	# Loop through cholla dumps
 	for dump_dir,color,ls,lw,label in zip(cholla_dirs,colors,linestyles,linewidths,labels):
 		
-		f = h5py.File(dump_dir+str(i_dumps[i])+'.h5.0', 'r')
+		f = h5py.File(dump_dir+str(i_dumps[i])+'.h5', 'r')
 		head = f.attrs
 		nx = head['dims'][0]
-		# gamma = head['gamma'][0]
+		gamma = head['gamma'][0]
 		# x = np.arange(0.5*head['dx'][0],1.,head['dx'][0])
 		x = np.array(range(0,nx,1))
 		d  = np.array(f['density']) # mass density
@@ -305,19 +307,13 @@ def plotter(bundle):
 		cs = np.sqrt(cs2)
 		M = v/cs
 		t = gamma*p/d
-		# logT_cgs = np.log10(gamma*p/d)
-		# logxi_cgs = np.log10(xi_b/d)
-	# 	B = 0.5*v**2 + cs2/(gamma - 1.) 
-	
-		# check to see if floors are hit
-		# d_min,d_max = np.min(d),np.max(d)
-		# p_min = np.min(p)
-		# print("time = {}, d_min = {}, d_max = {}, p_min = {}, p_max = {}".format(time,d_min,d_max,p_min,np.max(p)))
+		logT_cgs = np.log10(gamma*p/d)
+		logxi_cgs = np.log10(xi_b/d)
 	
 		# plot Cholla solution
-		ax1.plot(x,d,ls=ls,lw=lw,color=color,label=label)
-		ax2.plot(x,v,ls=ls,lw=lw,color=color)
-		ax3.plot(x,p,ls=ls,lw=lw,color=color)
+		ax1.plot(x/(1799/9.636),d,ls=ls,lw=lw,color=color,label=label)
+		ax2.plot(x/(1799/9.636),v,ls=ls,lw=lw,color=color)
+		ax3.plot(x/(1799/9.636),p,ls=ls,lw=lw,color=color)
 		ax5.plot(x,t,ls=ls,lw=lw,color=color)
 
 	# Loop through athena dumps
@@ -399,6 +395,7 @@ if __name__ == '__main__':
 			"athena_dirs": athena_dirs,
 			"athena_labels": athena_labels,
 			"i_dumps": i_dumps,
+			"gamma": gamma,
 			"ax1": ax1,
 			"ax2": ax2,
 			"ax3": ax3,
